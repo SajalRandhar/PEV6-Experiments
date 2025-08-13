@@ -37,3 +37,58 @@ select * from (
 
 select * from T2
 """
+
+### OD Claim count Data
+query = """
+WITH Register_With_CovidImpact AS (
+    SELECT 
+        CASE
+            WHEN EXTRACT(YEAR FROM a.Ana_St_month) = 2020 AND EXTRACT(MONTH FROM a.Ana_St_month) IN (3, 4, 5, 6, 7, 8, 9) THEN 1
+            WHEN EXTRACT(YEAR FROM a.Ana_St_month) = 2021 AND EXTRACT(MONTH FROM a.Ana_St_month) IN (4, 5, 6) THEN 1
+            WHEN EXTRACT(YEAR FROM a.Ana_St_month) = 2022 AND EXTRACT(MONTH FROM a.Ana_St_month) IN (1) THEN 1
+            WHEN EXTRACT(YEAR FROM a.Ana_St_month) = 2023 AND EXTRACT(MONTH FROM a.Ana_St_month) IN (12) AND a.city = 'Chennai' THEN 1
+            ELSE 0
+        END AS Ext_Impact,
+        a.*
+    FROM Health_IIB_DG.Motor_Policy_LR_Calc_Final_overall_car a
+),
+Filtered_Policies AS (
+    SELECT DISTINCT
+        SPLIT(policy_number, '/')[SAFE_OFFSET(0)] AS base_policy
+    FROM Test.ClaimsDash
+    WHERE LOWER(TotalLoss) = 'yes'
+       OR (cat_name IS NOT NULL AND lower(cat_name) != 'no catcode')
+),
+Target_Table AS (
+    SELECT 
+        base_policy, renewal_flag,
+        SUM(exposure) AS exposure,
+        SUM(CASE 
+                WHEN LOWER(Claim_Type) = 'own damage' 
+                     AND lower(claim_status) IN ('paid', 'outstanding') 
+                     AND Ext_Impact = 0 
+                THEN 1 
+                ELSE 0 
+            END) AS od_claim_count,
+        SUM(CASE 
+        WHEN LOWER(Claim_Type) = 'own damage' 
+             AND lower(claim_status) IN ('paid', 'outstanding') 
+             AND Ext_Impact = 0 
+        THEN amt
+        ELSE 0 
+      END) AS od_claim_paid
+
+    FROM Register_With_CovidImpact
+    WHERE 
+        Ana_end <= '2025-07-08' ## change it to current date
+        AND Product IN ('car_od', 'car_bundled', 'car_comprehensive', 'car_acko_garage')
+        AND Status2 != 'CANCELLED'
+        AND base_policy NOT IN (
+            SELECT base_policy
+            FROM Filtered_Policies
+        )
+    GROUP BY base_policy, renewal_flag
+)
+SELECT * 
+FROM Target_Table
+"""
